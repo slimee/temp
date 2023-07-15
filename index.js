@@ -3,8 +3,8 @@ const {Decoder} = require('libqp');
 const {parse} = require("csv-parse");
 const { MongoClient, ServerApiVersion } = require('mongodb');
 
-const myMail = "maisonaufonddujardin@gmail.com";
-const myPwd = "ledaygzmaslbjwgo";
+const myMail = process.env.MAIL;
+const myPwd = process.env.MAIL_PWD
 let count = 0;
 
 const uri = process.env.MONGO_URI;
