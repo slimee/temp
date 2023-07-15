@@ -26,14 +26,9 @@ async function run() {
         bodies: ['HEADER.FIELDS (FROM TO SUBJECT DATE)'],
         struct: true
     });
-    f.on('message', function (msg, seqno) {
-        const prefix = '(#' + seqno + ') ';
-        msg.on('body', function (stream, info) {
-            let buffer = '';
-            stream.on('data', function (chunk) {
-                buffer += chunk.toString('utf8');
-            });
-        });
+    f.once('error', function (err) {});
+    f.once('end', function () { imap.end(); });
+    f.on('message', function (msg) {
         msg.once('attributes', function (attrs) {
             const attachments = findAttachmentParts(attrs.struct);
             for (let i = 0, len = attachments.length; i < len; ++i) {
@@ -74,10 +69,7 @@ async function run() {
                 });
             }
         });
-        msg.once('end', function () {});
     });
-    f.once('error', function (err) {});
-    f.once('end', function () { imap.end(); });
 }
 async function imapOnceReady(imap) {
     return new Promise((resolve, reject) => {
