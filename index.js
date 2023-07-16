@@ -2,8 +2,11 @@ const Imap = require('imap');
 const {Decoder} = require('libqp');
 const {parse} = require("csv-parse");
 const { MongoClient, ServerApiVersion } = require('mongodb');
+const fs = require("fs");
 
-let count = 0;
+const path = `fichiers/${Date.now()}/`;
+fs.mkdirSync(path, { recursive: true })
+
 async function run() {
     const client = new MongoClient(process.env.MONGO_URI, { serverApi: ServerApiVersion.v1 });
     await client.connect();
@@ -19,57 +22,48 @@ async function run() {
         },
         authTimeout: 3000
     }).once('error', err => console.log('imap', err));
-    imap.connect();
-    await imapOnceReady(imap);
+    imap.connect(); await imapOnceReady(imap);
     await imapOpenbox(imap, 'INBOX');
-    const f = imap.seq.fetch('1:3', {
-        bodies: ['HEADER.FIELDS (FROM TO SUBJECT DATE)'],
-        struct: true
-    });
-    f.once('error', function (err) {});
-    f.once('end', function () { imap.end(); });
-    f.on('message', function (msg) {
-        msg.once('attributes', function (attrs) {
+
+    const onMessage = function (messageEventEmitter) {
+        messageEventEmitter.once('attributes', function (attrs) {
             const attachments = findAttachmentParts(attrs.struct);
             for (let i = 0, len = attachments.length; i < len; ++i) {
                 const attachment = attachments[i];
-                const f = imap.fetch(attrs.uid, { //do not use imap.seq.fetch here
+                const pjFetch = imap.fetch(attrs.uid, { //do not use imap.seq.fetch here
                     bodies: [attachment.partID],
                     struct: true
                 });
-                f.on('message', (msg) => {
-                    msg.on('body', async function (stream) {
+                pjFetch.on('message', (message) => {
+                    message.on('body', async function (stream) {
                         const room =  attachment.params.name.split('_')[0];
-                        console.log('streaming room', room);
-
+                        let rowCount = 0;
                         stream
                             .pipe(new Decoder())
                             .pipe(parse({from_line: 2}))
                             .on("data", (row) => {
                                 const [rawTime, temp, hydro] = row;
-                                count++;
-                                if(count%500 === 0) console.log('tic', count)
                                 collection.insertOne({
                                     room,
                                     datetime: new Date(rawTime),
                                     temp: Number(temp),
                                     hydro: Number(hydro)
                                 })
+                                rowCount++;
+                            })
+                            .on('end', () => {
+                                console.log(`message ${attrs.uid}, room ${room}, attachment ${i}, ${rowCount} rows`);
                             });
 
-                        // console.log(await streamToString(stream
-                        //     .pipe(decoder) // problem
-                        // ));
-
-                        // const writeStream = fs.createWriteStream('fichiers/' + room);
-                        // stream
-                        //     .pipe(new Decoder())
-                        //     .pipe(writeStream);
+                        stream
+                            .pipe(new Decoder())
+                            .pipe(fs.createWriteStream(`${path}/${attrs.uid}-${room}.csv`));
                     });
                 });
             }
         });
-    });
+    };
+    imapFetch(imap, onMessage);
 }
 async function imapOnceReady(imap) {
     return new Promise((resolve, reject) => {
@@ -87,9 +81,19 @@ async function imapOpenbox(imap, boxName) {
     })
 }
 
+function imapFetch(imap, onMessage) {
+    const fetch = imap.seq.fetch('1:*', {
+        bodies: ['HEADER.FIELDS (FROM TO SUBJECT DATE)'],
+        struct: true
+    });
+    fetch.once('error', function (err) {});
+    fetch.once('end', function () { imap.end(); });
+    fetch.on('message', onMessage);
+}
+
 function findAttachmentParts(struct, attachments) {
     attachments = attachments || [];
-    for (let i = 0, len = struct.length, r; i < len; ++i) {
+    for (let i = 0, len = struct.length; i < len; ++i) {
         if (Array.isArray(struct[i])) {
             findAttachmentParts(struct[i], attachments);
         } else {
@@ -103,16 +107,6 @@ function findAttachmentParts(struct, attachments) {
 
 function toUpper(thing) {
     return thing && thing.toUpperCase ? thing.toUpperCase() : thing;
-}
-
-
-function streamToString (stream) {
-    const chunks = [];
-    return new Promise((resolve, reject) => {
-        stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-        stream.on('error', (err) => reject(err));
-        stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    })
 }
 
 run().catch(console.error);
