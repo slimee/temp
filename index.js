@@ -10,7 +10,9 @@ fs.mkdirSync(path, { recursive: true })
 async function run() {
     const client = new MongoClient(process.env.MONGO_URI, { serverApi: ServerApiVersion.v1 });
     await client.connect();
+    await client.db("maison").collection("govee").drop();
     const collection = client.db("maison").collection("govee");
+
     const imap = new Imap({
         user: process.env.MAIL,
         password: process.env.MAIL_PWD,
@@ -23,7 +25,9 @@ async function run() {
         authTimeout: 3000
     }).once('error', err => console.log('imap', err));
     imap.connect(); await imapOnceReady(imap);
-    await imapOpenbox(imap, 'INBOX');
+    const mailbox = await imapOpenbox(imap, 'INBOX');
+
+    console.log(`Total messages in ${mailbox.name}: ${mailbox.messages.total}`);
 
     const onMessage = function (messageEventEmitter) {
         messageEventEmitter.once('attributes', function (attrs) {
@@ -38,21 +42,20 @@ async function run() {
                     message.on('body', async function (stream) {
                         const room =  attachment.params.name.split('_')[0];
                         let rowCount = 0;
+                        let logDatetime;
                         stream
                             .pipe(new Decoder())
                             .pipe(parse({from_line: 2}))
-                            .on("data", (row) => {
-                                const [rawTime, temp, hydro] = row;
-                                collection.insertOne({
-                                    room,
-                                    datetime: new Date(rawTime),
-                                    temp: Number(temp),
-                                    hydro: Number(hydro)
-                                })
+                            .on("data", async (row) => {
+                                const [rawTime, rawTemp, rawHydro] = row;
+                                const [datetime, temp, hydro] = [new Date(rawTime), Number(rawTemp), Number(rawHydro)];
+                                logDatetime = datetime;
+                                collection.insertOne({ room, datetime, temp, hydro })
+                                    .catch(err => console.error(`Failed to update document: ${err}`));
                                 rowCount++;
                             })
                             .on('end', () => {
-                                console.log(`message ${attrs.uid}, room ${room}, attachment ${i}, ${rowCount} rows`);
+                                console.log(`${formatDatetime(logDatetime)}, message ${attrs.uid}, ${room}, attachment ${i}, ${rowCount} rows`);
                             });
 
                         stream
@@ -82,10 +85,11 @@ async function imapOpenbox(imap, boxName) {
 }
 
 function imapFetch(imap, onMessage) {
-    const fetch = imap.seq.fetch('1:*', {
+    const fetchOptions = {
         bodies: ['HEADER.FIELDS (FROM TO SUBJECT DATE)'],
         struct: true
-    });
+    };
+    const fetch = imap.seq.fetch('1:*', fetchOptions);
     fetch.once('error', function (err) {});
     fetch.once('end', function () { imap.end(); });
     fetch.on('message', onMessage);
@@ -107,6 +111,17 @@ function findAttachmentParts(struct, attachments) {
 
 function toUpper(thing) {
     return thing && thing.toUpperCase ? thing.toUpperCase() : thing;
+}
+
+function formatDatetime(date) {
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+
+    return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
 }
 
 run().catch(console.error);
