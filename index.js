@@ -30,6 +30,12 @@ async function run() {
     console.log(`Total messages in ${mailbox.name}: ${mailbox.messages.total}`);
 
     const onMessage = function (messageEventEmitter) {
+        let mailDate;
+        messageEventEmitter.on('body', function (stream) {
+            stream.on('data', function (chunk) {
+                mailDate = chunk.toString().split('\r\n')[0].split(',')[1].trim();
+            });
+        });
         messageEventEmitter.once('attributes', function (attrs) {
             const attachments = findAttachmentParts(attrs.struct);
             for (let i = 0, len = attachments.length; i < len; ++i) {
@@ -42,20 +48,22 @@ async function run() {
                     message.on('body', async function (stream) {
                         const room =  attachment.params.name.split('_')[0];
                         let rowCount = 0;
-                        let logDatetime;
+                        let firstDatetime;
+                        let lastDatetime;
                         stream
                             .pipe(new Decoder())
                             .pipe(parse({from_line: 2}))
                             .on("data", async (row) => {
                                 const [rawTime, rawTemp, rawHydro] = row;
                                 const [datetime, temp, hydro] = [new Date(rawTime), Number(rawTemp), Number(rawHydro)];
-                                logDatetime = datetime;
+                                if(!firstDatetime) firstDatetime = datetime;
+                                lastDatetime = datetime;
                                 collection.insertOne({ room, datetime, temp, hydro })
                                     .catch(err => console.error(`Failed to update document: ${err}`));
                                 rowCount++;
                             })
                             .on('end', () => {
-                                console.log(`${formatDatetime(logDatetime)}, message ${attrs.uid}, ${room}, attachment ${i}, ${rowCount} rows`);
+                                console.log(`${mailDate} - ${formatDatetime(firstDatetime)} => ${formatDatetime(lastDatetime)}, message ${attrs.uid}, ${room}, attachment ${i}, ${rowCount} rows`);
                             });
 
                         stream
@@ -86,7 +94,7 @@ async function imapOpenbox(imap, boxName) {
 
 function imapFetch(imap, onMessage) {
     const fetchOptions = {
-        bodies: ['HEADER.FIELDS (FROM TO SUBJECT DATE)'],
+        bodies: ['HEADER.FIELDS (DATE)'],
         struct: true
     };
     const fetch = imap.seq.fetch('1:*', fetchOptions);
