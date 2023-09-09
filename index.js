@@ -6,12 +6,18 @@ const fs = require("fs");
 
 const path = `fichiers/${Date.now()}/`;
 fs.mkdirSync(path, { recursive: true })
+let count = 0;
 
 async function run() {
     const client = new MongoClient(process.env.MONGO_URI, { serverApi: ServerApiVersion.v1 });
     await client.connect();
-    await client.db("maison").collection("govee").drop();
-    const collection = client.db("maison").collection("govee");
+    const db = client.db("maison");
+    try{
+        await db.dropDatabase();
+    }catch(err){
+        console.error(err);
+    }
+    const collection = db.collection("govee");
 
     const imap = new Imap({
         user: process.env.MAIL,
@@ -58,12 +64,13 @@ async function run() {
                                 const [datetime, temp, hydro] = [new Date(rawTime), Number(rawTemp), Number(rawHydro)];
                                 if(!firstDatetime) firstDatetime = datetime;
                                 lastDatetime = datetime;
-                                collection.insertOne({ room, datetime, temp, hydro })
-                                    .catch(err => console.error(`Failed to update document: ${err}`));
                                 rowCount++;
+                                count++;
+                                await collection.insertOne({ room, datetime, temp, hydro })
+                                    .catch(err => console.error(`Failed to update document: ${err}`));
                             })
                             .on('end', () => {
-                                console.log(`${mailDate} - ${formatDatetime(firstDatetime)} => ${formatDatetime(lastDatetime)}, message ${attrs.uid}, ${room}, attachment ${i}, ${rowCount} rows`);
+                                console.log(`${mailDate} - ${formatDatetime(firstDatetime)} => ${formatDatetime(lastDatetime)}, message ${attrs.uid}, ${room}, attachment ${i}, ${rowCount} rows, total: ${count}`);
                             });
 
                         stream
